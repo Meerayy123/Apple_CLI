@@ -21,6 +21,7 @@ class Portfolio:
         existing = self.find_investment(inv.ticker)
         if existing:
             existing.quantity += inv.quantity
+            # keep purchase price of the last buy for simplicity
             existing.purchase_price = inv.purchase_price
         else:
             self.holdings.append(inv)
