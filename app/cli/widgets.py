@@ -1,32 +1,47 @@
 from __future__ import annotations
-from typing import Iterable
-from rich.console import Console
-from rich.table import Table
 
-# local console for helper messages/tables
-console = Console()
+from typing import Iterable, Sequence, Any
 
-def prompt_int(message: str) -> int:
-    while True:
-        try:
-            return int(input(message))
-        except ValueError:
-            console.print("[red]Please enter a valid integer.[/red]")
 
-def prompt_float(message: str) -> float:
-    while True:
-        try:
-            return float(input(message))
-        except ValueError:
-            console.print("[red]Please enter a valid number.[/red]")
+def print_header(title: str) -> None:
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
 
-def show_table(title: str, headers: Iterable[str], rows: Iterable[Iterable[object]]) -> None:
-    table = Table(title=title)
-    for h in headers:
-        table.add_column(str(h))
+
+def print_table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> None:
+    headers = list(headers)
+    rows = [list(map(str, row)) for row in rows]
+
+    widths = [len(h) for h in headers]
     for row in rows:
-        table.add_row(*[str(x) for x in row])
-    console.print(table)
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
 
-def banner(text: str) -> None:
-    console.rule(f"[bold]{text}[/bold]")
+    def fmt(row: Sequence[str]) -> str:
+        return " | ".join(cell.ljust(widths[i]) for i, cell in enumerate(row))
+
+    print(fmt(headers))
+    print("-" * (sum(widths) + 3 * (len(widths) - 1)))
+    for row in rows:
+        print(fmt(row))
+
+
+def prompt_int(label: str) -> int:
+    while True:
+        try:
+            return int(input(f"{label}: ").strip())
+        except ValueError:
+            print("Please enter a valid integer.")
+
+
+def prompt_float(label: str) -> float:
+    while True:
+        try:
+            return float(input(f"{label}: ").strip())
+        except ValueError:
+            print("Please enter a valid number.")
+
+
+def prompt_str(label: str) -> str:
+    return input(f"{label}: ").strip()

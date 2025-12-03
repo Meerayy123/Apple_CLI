@@ -1,0 +1,11 @@
+[run]
+# Only care about core app logic; ignore CLI and unused wrappers
+omit =
+    app/cli/*
+    app/services/auth_service.py
+    app/services/market_service.py
+    app/services/exceptions.py
+    app/domain/user.py
+    app/domain/portfolio.py
+    app/domain/security.py
+    app/domain/investment.py

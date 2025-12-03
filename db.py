@@ -1,61 +1,65 @@
+# db.py
 from __future__ import annotations
-from typing import Dict, List, Optional
-from app.domain.user import User
-from app.domain.portfolio import Portfolio
-from app.domain.security import Security
 
-logged_in_user: Optional[User] = None
+import os
+from contextlib import contextmanager
+from typing import Iterator
 
-users: Dict[str, User] = {
-    "admin": User(first_name="System", last_name="Admin", username="admin", password="admin123", balance=0.0, is_admin=True)
-}
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-portfolios: Dict[str, List[Portfolio]] = {"admin": []}
+# -------------------------------------------------------------------
+# Database configuration
+# -------------------------------------------------------------------
 
-securities: Dict[str, Security] = {
-    "AAPL": Security(ticker="AAPL", issuer="Apple Inc.", price=180.00),
-    "MSFT": Security(ticker="MSFT", issuer="Microsoft Corp.", price=330.00),
-    "NVDA": Security(ticker="NVDA", issuer="NVIDIA Corp.", price=850.00),
-}
+# Use SQLite for local development so we can move forward.
+# This creates a file "apple_cli.db" in your project folder.
+DEFAULT_DB_URL = "sqlite:///apple_cli.db"
 
-_next_portfolio_id: int = 1
+# You can override this with APPLE_DB_URL to use MySQL later, e.g.:
+#   export APPLE_DB_URL="mysql+pymysql://apple_user:apple_pass@localhost/apple_cli_db"
+DATABASE_URL = os.getenv("APPLE_DB_URL", DEFAULT_DB_URL)
 
-def set_logged_in(user: Optional[User]) -> None:
-    global logged_in_user
-    logged_in_user = user
+# SQLAlchemy engine
+engine = create_engine(
+    DATABASE_URL,
+    future=True,
+    echo=False,      # set True if you want to see SQL
+)
 
-def get_logged_in() -> Optional[User]:
-    return logged_in_user
+# Session factory
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+    expire_on_commit=False,
+    future=True,
+)
 
-def username_exists(username: str) -> bool:
-    return username in users
+# Base class for ORM models
+Base = declarative_base()
 
-def add_user(user: User) -> None:
-    users[user.username] = user
-    if user.username not in portfolios:
-        portfolios[user.username] = []
 
-def remove_user(username: str) -> None:
-    users.pop(username, None)
-    portfolios.pop(username, None)
+# -------------------------------------------------------------------
+# Session helper
+# -------------------------------------------------------------------
 
-def all_users() -> List[User]:
-    return list(users.values())
+@contextmanager
+def get_session() -> Iterator[Session]:
+    """
+    Provide a transactional scope around a series of operations.
 
-def next_portfolio_id() -> int:
-    global _next_portfolio_id
-    pid = _next_portfolio_id
-    _next_portfolio_id += 1
-    return pid
-
-def get_user_portfolios(username: str) -> List[Portfolio]:
-    return portfolios.get(username, [])
-
-def save_user_portfolios(username: str, items: List[Portfolio]) -> None:
-    portfolios[username] = items
-
-def get_security(ticker: str) -> Optional[Security]:
-    return securities.get(ticker.upper())
-
-def list_securities() -> List[Security]:
-    return list(securities.values())
+    Usage:
+        from db import get_session
+        with get_session() as session:
+            session.add(obj)
+    """
+    session: Session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

@@ -1,69 +1,45 @@
+# app/services/portfolio_service.py
 from __future__ import annotations
-from typing import List
-import db
-from app.domain.portfolio import Portfolio
-from app.domain.investment import Investment
-from app.services.exceptions import ValidationError, NotFoundError
 
-def list_user_portfolios(username: str) -> List[Portfolio]:
-    return db.get_user_portfolios(username)
+from typing import List, Optional
 
-def create_portfolio(username: str, name: str, description: str) -> Portfolio:
-    if not name.strip():
-        raise ValidationError("Portfolio name cannot be empty.")
-    pid = db.next_portfolio_id()
-    p = Portfolio(id=pid, name=name.strip(), description=description.strip())
-    items = db.get_user_portfolios(username)
-    items.append(p)
-    db.save_user_portfolios(username, items)
-    return p
+from db import get_session
+from app.domain.models import User, Portfolio
 
-def delete_portfolio(username: str, portfolio_id: int) -> None:
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    if target.holdings:
-        raise ValidationError("Portfolio has holdings. Liquidate investments before deleting.")
-    items = [p for p in items if p.id != portfolio_id]
-    db.save_user_portfolios(username, items)
 
-def buy(username: str, portfolio_id: int, ticker: str, qty: int) -> None:
-    if qty <= 0:
-        raise ValidationError("Quantity must be a positive integer.")
-    sec = db.get_security(ticker)
-    if not sec:
-        raise NotFoundError("Invalid ticker symbol.")
-    user = db.users[username]
-    cost = sec.price * qty
-    if user.balance < cost:
-        raise ValidationError("Insufficient balance for this order.")
-    user.balance -= cost
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    target.add_or_update_investment(Investment(ticker=sec.ticker, quantity=qty, purchase_price=sec.price))
-    db.save_user_portfolios(username, items)
+class PortfolioService:
+    """Service layer for working with portfolios."""
 
-def harvest(username: str, portfolio_id: int, ticker: str, qty: int, sale_price: float) -> None:
-    if qty <= 0:
-        raise ValidationError("Quantity must be a positive integer.")
-    if sale_price <= 0:
-        raise ValidationError("Sale price must be positive.")
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    inv = target.find_investment(ticker)
-    if not inv:
-        raise NotFoundError("Investment not found in this portfolio.")
-    if qty > inv.quantity:
-        raise ValidationError("Quantity exceeds current holding.")
-    proceeds = sale_price * qty
-    db.users[username].balance += proceeds
-    if qty == inv.quantity:
-        target.remove_investment(inv.ticker)
-    else:
-        inv.quantity -= qty
-    db.save_user_portfolios(username, items)
+    @staticmethod
+    def create_portfolio(user_id: int, label: str) -> Portfolio:
+        """Create a portfolio for a given user."""
+        if not label.strip():
+            raise ValueError("Portfolio label is required.")
+
+        with get_session() as session:
+            owner = session.get(User, user_id)
+            if owner is None:
+                raise ValueError("User does not exist.")
+
+            portfolio = Portfolio(label=label.strip(), owner=owner)
+            session.add(portfolio)
+            session.flush()
+            session.refresh(portfolio)
+            return portfolio
+
+    @staticmethod
+    def get_portfolio(portfolio_id: int) -> Optional[Portfolio]:
+        """Fetch a portfolio by id."""
+        with get_session() as session:
+            return session.get(Portfolio, portfolio_id)
+
+    @staticmethod
+    def list_for_user(user_id: int) -> List[Portfolio]:
+        """List all portfolios for a given user."""
+        with get_session() as session:
+            return (
+                session.query(Portfolio)
+                .filter(Portfolio.user_id == user_id)
+                .order_by(Portfolio.id)
+                .all()
+            )
