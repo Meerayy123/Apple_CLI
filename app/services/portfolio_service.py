@@ -1,69 +1,57 @@
+# app/services/portfolio_service.py
 from __future__ import annotations
-from typing import List
-import db
+
+from typing import List, Optional
+
+from app.db import db
+from app.domain.user import User
 from app.domain.portfolio import Portfolio
-from app.domain.investment import Investment
-from app.services.exceptions import ValidationError, NotFoundError
 
-def list_user_portfolios(username: str) -> List[Portfolio]:
-    return db.get_user_portfolios(username)
 
-def create_portfolio(username: str, name: str, description: str) -> Portfolio:
-    if not name.strip():
-        raise ValidationError("Portfolio name cannot be empty.")
-    pid = db.next_portfolio_id()
-    p = Portfolio(id=pid, name=name.strip(), description=description.strip())
-    items = db.get_user_portfolios(username)
-    items.append(p)
-    db.save_user_portfolios(username, items)
-    return p
+class PortfolioService:
+    """Service layer for working with portfolios (Flask-SQLAlchemy)."""
 
-def delete_portfolio(username: str, portfolio_id: int) -> None:
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    if target.holdings:
-        raise ValidationError("Portfolio has holdings. Liquidate investments before deleting.")
-    items = [p for p in items if p.id != portfolio_id]
-    db.save_user_portfolios(username, items)
+    @staticmethod
+    def create_portfolio(user_id: int, name: str) -> Portfolio:
+        if not name or not name.strip():
+            raise ValueError("Portfolio name is required.")
 
-def buy(username: str, portfolio_id: int, ticker: str, qty: int) -> None:
-    if qty <= 0:
-        raise ValidationError("Quantity must be a positive integer.")
-    sec = db.get_security(ticker)
-    if not sec:
-        raise NotFoundError("Invalid ticker symbol.")
-    user = db.users[username]
-    cost = sec.price * qty
-    if user.balance < cost:
-        raise ValidationError("Insufficient balance for this order.")
-    user.balance -= cost
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    target.add_or_update_investment(Investment(ticker=sec.ticker, quantity=qty, purchase_price=sec.price))
-    db.save_user_portfolios(username, items)
+        owner = db.session.get(User, user_id)
+        if owner is None:
+            raise ValueError("User does not exist.")
 
-def harvest(username: str, portfolio_id: int, ticker: str, qty: int, sale_price: float) -> None:
-    if qty <= 0:
-        raise ValidationError("Quantity must be a positive integer.")
-    if sale_price <= 0:
-        raise ValidationError("Sale price must be positive.")
-    items = db.get_user_portfolios(username)
-    target = next((p for p in items if p.id == portfolio_id), None)
-    if not target:
-        raise NotFoundError("Invalid portfolio id.")
-    inv = target.find_investment(ticker)
-    if not inv:
-        raise NotFoundError("Investment not found in this portfolio.")
-    if qty > inv.quantity:
-        raise ValidationError("Quantity exceeds current holding.")
-    proceeds = sale_price * qty
-    db.users[username].balance += proceeds
-    if qty == inv.quantity:
-        target.remove_investment(inv.ticker)
-    else:
-        inv.quantity -= qty
-    db.save_user_portfolios(username, items)
+        portfolio = Portfolio(name=name.strip(), user_id=owner.id)
+
+        try:
+            db.session.add(portfolio)
+            db.session.commit()
+            db.session.refresh(portfolio)
+            return portfolio
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @staticmethod
+    def get_portfolio(portfolio_id: int) -> Optional[Portfolio]:
+        return db.session.get(Portfolio, portfolio_id)
+
+    @staticmethod
+    def list_portfolios() -> List[Portfolio]:
+        return Portfolio.query.order_by(Portfolio.id).all()
+
+    @staticmethod
+    def list_for_user(user_id: int) -> List[Portfolio]:
+        return Portfolio.query.filter_by(user_id=user_id).order_by(Portfolio.id).all()
+
+    @staticmethod
+    def delete_portfolio(portfolio_id: int) -> None:
+        portfolio = db.session.get(Portfolio, portfolio_id)
+        if portfolio is None:
+            raise ValueError("Portfolio not found.")
+
+        try:
+            db.session.delete(portfolio)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise

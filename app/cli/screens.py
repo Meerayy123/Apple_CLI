@@ -1,245 +1,231 @@
 from __future__ import annotations
-from rich.console import Console
 
-from app.cli.widgets import prompt_int, prompt_float, show_table, banner
-import db
-from app.services import auth_service, portfolio_service, market_service
-from app.services.exceptions import AppError, PermissionError
+from app.services.user_service import UserService
+from app.services.portfolio_service import PortfolioService
+from app.services.transaction_service import TransactionService
+from app.cli.widgets import (
+    print_header,
+    print_table,
+    prompt_int,
+    prompt_float,
+    prompt_str,
+)
 
-console = Console()
-
-# ─────────────────────────── Login / Main ───────────────────────────
-
-def login_screen() -> None:
-    while True:
-        banner("Welcome")
-        console.print("1) Login")
-        console.print("2) Exit")
-        choice = input("Select an option (1-2): ").strip()
-        if choice == "2":
-            console.print("[bold]Goodbye![/bold]")
-            raise SystemExit(0)
-        if choice == "1":
-            username = input("Username: ").strip()
-            password = input("Password: ").strip()
-            try:
-                auth_service.login(username, password)
-                console.print(f"[green]Logged in as {username}[/green]")
-                main_menu()
-            except AppError as e:
-                console.print(f"[red]{e}[/red]")
-        else:
-            console.print("[red]Invalid option.[/red]")
 
 def main_menu() -> None:
+    """Top-level menu for the CLI application."""
     while True:
-        user = db.get_logged_in()
-        if not user:
-            return
-        banner(f"Main Menu – {user.username}")
-        console.print("1) Manage Users")
-        console.print("2) Manage Portfolios")
-        console.print("3) Marketplace")
-        console.print("4) Logout")
+        print_header("Apple CLI - Portfolio Manager")
+        print("1) List users")
+        print("2) Create user")
+        print("3) Select user")
+        print("4) Exit")
         choice = input("Select an option (1-4): ").strip()
-        try:
-            if choice == "1":
-                manage_users_menu()
-            elif choice == "2":
-                manage_portfolios_menu()
-            elif choice == "3":
-                marketplace_menu()
-            elif choice == "4":
-                auth_service.logout()
-                console.print("[yellow]Logged out.[/yellow]")
-                return
-            else:
-                console.print("[red]Invalid option.[/red]")
-        except AppError as e:
-            console.print(f"[red]{e}[/red]")
-
-# ─────────────────────────── Users (Admin) ───────────────────────────
-
-def manage_users_menu() -> None:
-    try:
-        auth_service.require_admin()
-    except PermissionError as e:
-        console.print(f"[red]{e}[/red]")
-        return
-
-    while True:
-        banner("Manage Users (admin)")
-        console.print("1) View Users")
-        console.print("2) Add User")
-        console.print("3) Delete User")
-        console.print("4) Back")
-        choice = input("Select an option (1-4): ").strip()
-
-        if choice == "4":
-            return
 
         if choice == "1":
-            rows = [[u.first_name, u.last_name, u.username, "Yes" if u.is_admin else "No", f"{u.balance:.2f}"]
-                    for u in db.all_users()]
-            show_table("Users", ["First", "Last", "Username", "Admin", "Balance"], rows)
-            continue
-
-        if choice == "2":
-            first = input("First name: ").strip()
-            last = input("Last name: ").strip()
-            username = input("Username: ").strip()
-            if db.username_exists(username):
-                console.print("[red]Username already exists.[/red]")
-                continue
-            password = input("Password: ").strip()
-            balance = prompt_float("Initial balance: ")
-            is_admin = input("Make admin? (y/N): ").strip().lower() == "y"
-            from app.domain.user import User
-            db.add_user(User(first_name=first, last_name=last, username=username,
-                             password=password, balance=balance, is_admin=is_admin))
-            console.print("[green]User created.[/green]")
-            continue
-
-        if choice == "3":
-            username = input("Username to delete: ").strip()
-            if username not in db.users:
-                console.print("[red]User does not exist.[/red]")
-                continue
-            if username == "admin":
-                console.print("[red]Cannot delete the admin account.[/red]")
-                continue
-            if db.get_user_portfolios(username):
-                console.print("[red]This user has portfolios. Delete them first.[/red]")
-                continue
-            db.remove_user(username)
-            console.print("[green]User deleted.[/green]")
-            continue
-
-        console.print("[red]Invalid option.[/red]")
-
-# ─────────────────────────── Portfolios ───────────────────────────
-
-def manage_portfolios_menu() -> None:
-    user = db.get_logged_in()
-    if not user:
-        return
-
-    while True:
-        banner("Manage Portfolios")
-        console.print("1) View portfolios")
-        console.print("2) Create portfolio (add holdings now)")
-        console.print("3) Delete portfolio")
-        console.print("4) Harvest investment (SELL)")
-        console.print("5) Liquidate entire portfolio")
-        console.print("6) Back")
-        choice = input("Select an option (1-6): ").strip()
-
-        try:
-            if choice == "1":
-                _show_user_portfolios(user.username)
-
-            elif choice == "2":
-                name = input("Portfolio name: ").strip()
-                desc = input("Portfolio description: ").strip()
-                p = portfolio_service.create_portfolio(user.username, name, desc)
-                console.print(f"[green]Portfolio #{p.id} created.[/green]")
-                _initial_buys_flow(user.username, p.id)   # ← ALWAYS prompts after creation
-
-            elif choice == "3":
-                pid = prompt_int("Portfolio id to delete: ")
-                portfolio_service.delete_portfolio(user.username, pid)
-                console.print("[green]Portfolio deleted.[/green]")
-
-            elif choice == "4":
-                pid = prompt_int("Portfolio id: ")
-                ticker = input("Ticker to sell: ").strip().upper()
-                qty = prompt_int("Quantity to sell: ")
-                price = prompt_float("Sale price: ")
-                portfolio_service.harvest(user.username, pid, ticker, qty, price)
-                console.print("[green]Investment sold.[/green]")
-
-            elif choice == "5":
-                pid = prompt_int("Portfolio id to liquidate: ")
-                port = portfolio_service.get_portfolio(user.username, pid)
-                if not port.holdings:
-                    console.print("[yellow]Portfolio has no holdings.[/yellow]")
-                else:
-                    for inv in list(port.holdings):
-                        price = prompt_float(f"Sale price for {inv.ticker} (qty {inv.quantity}): ")
-                        portfolio_service.harvest(user.username, pid, inv.ticker, inv.quantity, price)
-                    console.print(f"[green]Portfolio #{pid} fully liquidated.[/green]")
-
-            elif choice == "6":
-                return
-            else:
-                console.print("[red]Invalid option.[/red]")
-
-        except AppError as e:
-            console.print(f"[red]{e}[/red]")
-
-def _initial_buys_flow(username: str, portfolio_id: int) -> None:
-    """Interactive loop to add one or more initial positions right after creation."""
-    console.print(f"[cyan]Add initial holdings to portfolio #{portfolio_id}. "
-                  f"Press Enter on Ticker to finish.[/cyan]")
-    while True:
-        _show_securities()
-        ticker = input("Ticker (blank to finish): ").strip().upper()
-        if not ticker:
+            show_users()
+        elif choice == "2":
+            create_user()
+        elif choice == "3":
+            select_user_menu()
+        elif choice == "4":
+            print("Goodbye!")
             break
-        qty = prompt_int("Quantity: ")
-        try:
-            portfolio_service.buy(username, portfolio_id, ticker, qty)
-            console.print(f"[green]Added {qty} {ticker} to portfolio #{portfolio_id}[/green]")
-        except AppError as e:
-            console.print(f"[red]{e}[/red]")
+        else:
+            print("Invalid choice, please try again.")
 
-def _show_user_portfolios(username: str) -> None:
-    items = portfolio_service.list_user_portfolios(username)
-    if not items:
-        console.print("[yellow]You don't have any portfolios yet.[/yellow]")
+
+# --------------------------- User screens ---------------------------
+
+def show_users() -> None:
+    users = UserService.list_users()
+    if not users:
+        print("No users found.")
         return
 
-    rows = [[p.id, p.name, p.description, sum(inv.quantity for inv in p.holdings)] for p in items]
-    show_table("Your Portfolios", ["Id", "Name", "Description", "Total Positions"], rows)
+    print_header("Users")
+    rows = [(u.id, u.name, u.email, "yes" if u.is_admin else "no") for u in users]
+    print_table(["ID", "Name", "Email", "Admin"], rows)
 
-    for p in items:
-        if not p.holdings:
-            continue
-        rows = [[inv.ticker, inv.quantity, f"{inv.purchase_price:.2f}"] for inv in p.holdings]
-        show_table(f"Holdings for {p.name} (#{p.id})", ["Ticker", "Qty", "Last Buy Price"], rows)
 
-# ─────────────────────────── Marketplace ───────────────────────────
+def create_user() -> None:
+    print_header("Create User")
+    name = prompt_str("Name")
+    email = prompt_str("Email")
 
-def marketplace_menu() -> None:
-    user = db.get_logged_in()
+    try:
+        user = UserService.create_user(name, email)
+        print(f"Created user with id={user.id}")
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def select_user_menu() -> None:
+    show_users()
+    user_id = prompt_int("Enter user ID to manage (0 to cancel)")
+    if user_id == 0:
+        return
+
+    user = UserService.get_user(user_id)
     if not user:
+        print("User not found.")
         return
 
+    user_menu(user_id, user.name)
+
+
+def user_menu(user_id: int, user_name: str) -> None:
     while True:
-        banner("Marketplace")
-        console.print("1) View securities")
-        console.print("2) Place Buy Order")
-        console.print("3) Back")
-        choice = input("Select an option (1-3): ").strip()
+        print_header(f"User: {user_name} (id={user_id})")
+        print("1) List portfolios")
+        print("2) Create portfolio")
+        print("3) Select portfolio")
+        print("4) View all transactions for user")
+        print("5) Back to main menu")
 
-        try:
-            if choice == "3":
-                return
-            if choice == "1":
-                _show_securities()
-                continue
-            if choice == "2":
-                pid = prompt_int("Portfolio id: ")
-                ticker = input("Ticker: ").strip().upper()
-                qty = prompt_int("Quantity: ")
-                portfolio_service.buy(user.username, pid, ticker, qty)
-                console.print("[green]Buy order executed.[/green]")
-                continue
-            console.print("[red]Invalid option.[/red]")
-        except AppError as e:
-            console.print(f"[red]{e}[/red]")
+        choice = input("Select an option (1-5): ").strip()
 
-def _show_securities() -> None:
-    secs = market_service.list_market_securities()
-    rows = [[s.ticker, s.issuer, f"{s.price:.2f}"] for s in secs]
-    show_table("Available Securities", ["Ticker", "Issuer", "Price"], rows)
+        if choice == "1":
+            show_portfolios(user_id)
+        elif choice == "2":
+            create_portfolio(user_id)
+        elif choice == "3":
+            select_portfolio_menu(user_id)
+        elif choice == "4":
+            show_user_transactions(user_id)
+        elif choice == "5":
+            break
+        else:
+            print("Invalid choice, please try again.")
+
+
+# ------------------------ Portfolio screens ------------------------
+
+def show_portfolios(user_id: int) -> None:
+    portfolios = PortfolioService.list_for_user(user_id)
+    if not portfolios:
+        print("No portfolios found.")
+        return
+
+    print_header("Portfolios")
+    rows = [(p.id, p.label) for p in portfolios]
+    print_table(["ID", "Label"], rows)
+
+
+def create_portfolio(user_id: int) -> None:
+    print_header("Create Portfolio")
+    label = prompt_str("Portfolio label")
+
+    try:
+        p = PortfolioService.create_portfolio(user_id, label)
+        print(f"Created portfolio with id={p.id}")
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def select_portfolio_menu(user_id: int) -> None:
+    portfolios = PortfolioService.list_for_user(user_id)
+    if not portfolios:
+        print("No portfolios found.")
+        return
+
+    show_portfolios(user_id)
+    portfolio_id = prompt_int("Enter portfolio ID (0 to cancel)")
+    if portfolio_id == 0:
+        return
+
+    portfolio = PortfolioService.get_portfolio(portfolio_id)
+    if not portfolio or portfolio.user_id != user_id:
+        print("Portfolio not found or does not belong to this user.")
+        return
+
+    portfolio_menu(user_id, portfolio_id, portfolio.label)
+
+
+def portfolio_menu(user_id: int, portfolio_id: int, label: str) -> None:
+    while True:
+        print_header(f"Portfolio: {label} (id={portfolio_id})")
+        print("1) Buy security")
+        print("2) Sell security")
+        print("3) View portfolio transactions")
+        print("4) Back to user menu")
+
+        choice = input("Select an option (1-4): ").strip()
+
+        if choice == "1":
+            buy_security_screen(user_id, portfolio_id)
+        elif choice == "2":
+            sell_security_screen(user_id, portfolio_id)
+        elif choice == "3":
+            show_portfolio_transactions(portfolio_id)
+        elif choice == "4":
+            break
+        else:
+            print("Invalid choice, please try again.")
+
+
+# --------------------- Trading + transactions ----------------------
+
+def buy_security_screen(user_id: int, portfolio_id: int) -> None:
+    print_header("Buy Security")
+    symbol = prompt_str("Symbol (e.g., AAPL)")
+    qty = prompt_float("Quantity")
+    price_input = prompt_str("Price override (blank to use last_price)")
+    price = float(price_input) if price_input else None
+
+    try:
+        pos = TransactionService.buy_security(user_id, portfolio_id, symbol, qty, price)
+        print(
+            f"Buy executed. New position quantity={pos.quantity}, "
+            f"avg_cost={pos.avg_cost:.2f}"
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def sell_security_screen(user_id: int, portfolio_id: int) -> None:
+    print_header("Sell Security")
+    symbol = prompt_str("Symbol (e.g., AAPL)")
+    qty = prompt_float("Quantity")
+    price_input = prompt_str("Price override (blank to use last_price)")
+    price = float(price_input) if price_input else None
+
+    try:
+        TransactionService.sell_security(user_id, portfolio_id, symbol, qty, price)
+        print("Sell executed successfully.")
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def show_user_transactions(user_id: int) -> None:
+    txs = TransactionService.transactions_for_user(user_id)
+    if not txs:
+        print("No transactions for this user.")
+        return
+
+    print_header(f"Transactions for user_id={user_id}")
+    rows = [
+        (t.id, t.portfolio_id, t.security_id, t.kind.value, t.quantity, t.price, t.at)
+        for t in txs
+    ]
+    print_table(
+        ["ID", "Portfolio", "Security", "Type", "Qty", "Price", "Timestamp"],
+        rows,
+    )
+
+
+def show_portfolio_transactions(portfolio_id: int) -> None:
+    txs = TransactionService.transactions_for_portfolio(portfolio_id)
+    if not txs:
+        print("No transactions for this portfolio.")
+        return
+
+    print_header(f"Transactions for portfolio_id={portfolio_id}")
+    rows = [
+        (t.id, t.user_id, t.security_id, t.kind.value, t.quantity, t.price, t.at)
+        for t in txs
+    ]
+    print_table(
+        ["ID", "User", "Security", "Type", "Qty", "Price", "Timestamp"],
+        rows,
+    )
